@@ -1,0 +1,1 @@
+Using bininfo prefix /home/yanlin/typearmor-master/static/../out/binfo
