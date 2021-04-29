@@ -146,7 +146,6 @@ Each `binfo.*` file contains different sections:
   Indirect call whose arguments read 32-bit to 64-bit register
 
 3. Recovered Function Signature Comparison
-
 This is implemented in the python script comparison.py, which compares the recovered function signature with the collected ground truth.
 
 
