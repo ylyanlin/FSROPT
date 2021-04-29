@@ -118,31 +118,31 @@ Each `binfo.*` file contains different sections:
   Marker that indicates the end of the binfo.
   
 #notation for possible compilation
-* *readRDX*
+ * *readRDX*
   functions which read %rdx after a call instruction
   
-* *read63*
+ * *read63*
   functions which read 64 bit argument register, but the actual argument register is 32-bit, including lea and Push
 	
-* *Icall*
+ * *Icall*
   Indirect caller in wrapper function and there is no direct caller for this wrapper function
 	
-* *Dcall*
+ * *Dcall*
   Indirect caller in wrapper function and there are direct callers for this wrapper function
 
-* *ImmArg*
+ * *ImmArg*
   Indirect callers whose passed arguments are immediate values
 
-* *PointerArg*
+ * *PointerArg*
   Indirect callers whose passed arguments are pointers points to .data and .text sections
   
-* *Xor*
+ * *Xor*
   Indirect callers whose arguments are passed using xor instructions
 
-* *13Arg*
+ * *13Arg*
   Indirect caller whose arguments read 16-bit to 32-bit register
 
-* *36Arg*
+ * *36Arg*
   Indirect call whose arguments read 32-bit to 64-bit register
 
 3. Recovered Function Signature Comparison
