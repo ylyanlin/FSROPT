@@ -1,5 +1,6 @@
 
-This is the open-source component of our paper "When Function Signature Recovery Meets Compiler Optimization", published in IEEE Security & Privacy (S&P) 2021. It allows you to retrieve argument count information for callees and callsites of compiled C/C++ applications using the improved policy metioned in the paper.  
+This is the open-source component of our paper "When Function Signature Recovery Meets Compiler Optimization", published in IEEE Symposium on
+Security and Privacy (S&P) 2021. It allows you to retrieve argument count information for callees and callsites of compiled C/C++ applications using the improved policy metioned in the paper.  
 
 
 # Disclaimer
