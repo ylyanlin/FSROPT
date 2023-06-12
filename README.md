@@ -148,7 +148,7 @@ Each `binfo.*` file contains different sections:
 
 # Recovered Function Signature Comparison
 
-This is implemented in the python script comparison.py, which compares the recovered function signature with the collected ground truth.
+This is implemented in the python-script folder which compares the recovered function signature with the collected ground truth.
 
 
 

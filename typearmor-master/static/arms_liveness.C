@@ -45,7 +45,7 @@ using namespace Dyninst::SymtabAPI;
 
 //added by yanlin
 /* argument register width used*/
-#define  TEMPORARY
+#define  TEMPORARY                //To Handle Temp
 
 //#define unopt
 
@@ -55,9 +55,20 @@ using namespace Dyninst::SymtabAPI;
 #define STATISTICS
 
 //For case that default size of source operand is 64-bit
-#define SixToThree 
+#define SixToThree               //Identify and Handle Lea
+/*for case: in this case, it should be in categroy read63
+mov %rcx, 0x08(%rsp)
+......
+mov 0x08(%rsp), %rax
+lea (%rax,1,), eax
+*/
+#define secondLea
 
-#define CHECK_XOR
+#define six2three_policy
+
+#define CHECK_XOR           
+#define xor_policy           //Handle NUll
+#define constant_policy      //Handel Pointer and Imm
 
 #define Variadic_Over
 
@@ -65,7 +76,7 @@ using namespace Dyninst::SymtabAPI;
 
 //#define WRAPPER_OPT
 /* policy for variadic function idenfication, used*/ 
-#define STRATEGY_accurate_variadic
+#define STRATEGY_accurate_variadic        //Handle Nor2var in Clang
 
 //#define  CHECK_DCALL
 
@@ -78,16 +89,16 @@ using namespace Dyninst::SymtabAPI;
 
 /*if the predecessor of an indirect call can be another indirect, use 
 the basic blocks between these two calls to get the argument count.
-*/
-#define BETWEEN_CALL
+not used */
+//#define BETWEEN_CALL
 
 /* for argument width, when the argument is constant, we should
-    promote the register width*/
+    promote the register width not used */
 #define IMMEDIATE_VALUE
 //end of yanlin   
 
 
-//#define ALLOW_UNINITIALIZED_READ
+#define ALLOW_UNINITIALIZED_READ
 
 // TODO this is really TOO conservative...
 //#define CONSERVATIVE_CALLSITE
@@ -1602,6 +1613,7 @@ void ArmsLiveness::parse_instruction(Instruction::Ptr iptr,
         }
     }
 
+
     ins_length[offset] = iptr->size();
 
     if (iptr->size() == 2 && iptr->rawByte(0) == 0xF3 && iptr->rawByte(1) == 0x90) {
@@ -1638,6 +1650,24 @@ void ArmsLiveness::parse_instruction(Instruction::Ptr iptr,
         dprintf("                UD2\n");
     }
  */
+        //revised by yanlin
+    if (iptr->getOperation().getID() == e_xor or iptr->getOperation().getID() == e_sbb)
+    {
+		ddprintf("                XOR or sbb instruction\n");
+		std::vector<Operand> operands;
+		std::set<RegisterAST::Ptr> writtenSet;
+		
+		iptr->getOperands(operands);
+		
+		operands[0].getWriteSet(writtenSet);
+		#ifdef PARSE_DATA_SECTION
+        parse_register_set(iptr, data_info, writtenSet, bb, offset, IA64_WRITE);
+        #else
+		parse_register_set(writtenSet, bb, offset, IA64_WRITE);
+        #endif
+		writtenSet.clear();
+		
+	}              
 
     std::set<RegisterAST::Ptr> register_set;
 
@@ -1652,6 +1682,13 @@ void ArmsLiveness::parse_instruction(Instruction::Ptr iptr,
 
 
     if (!isNop(iptr)) iptr->getWriteSet(register_set);
+    #ifdef secondLea
+    //offsetToins(bb,offset,iptr);
+    //offset2reg[offset] = register_set;
+    //offset2insstr[offset] = iptr->format(0).c_str();
+    #endif
+
+
     #ifdef PARSE_DATA_SECTION
     parse_register_set(iptr, data_info,register_set, bb, offset, IA64_WRITE);
     #else
@@ -1741,6 +1778,9 @@ void ArmsLiveness::parse_block(ArmsFunction *f, ArmsBasicBlock *bb)
                                           it++) {
         /* it->first:  offset
          * it->second: instruction */
+        /*#ifdef secondLea
+        offset2ins2[it->first] = it->second;
+        #endif*/
         #ifdef PARSE_DATA_SECTION
         if (is_indirect)
         {
@@ -1758,7 +1798,6 @@ void ArmsLiveness::parse_block(ArmsFunction *f, ArmsBasicBlock *bb)
             is_nop = true;
             ddprintf("****nop edge %lx\n",bb->get_last_insn_address());
         }
-
         
     }
 
@@ -1869,10 +1908,10 @@ void ArmsLiveness::parse_block(ArmsFunction *f, ArmsBasicBlock *bb)
                 ddprintf("    > Not following indirect call edge, looking at fallthrough bb instead\n");
                 next_bb = bb->get_fallthrough_bb();
                 
-                //#ifdef BETWEEN_CALL
+                #ifdef BETWEEN_CALL
                 if (next_bb != NULL)
                     ret_blocks[f].insert(next_bb);
-                //#endif
+                #endif
                 
 
                 /* This looks like a great place to perform the live analysis for
@@ -2463,6 +2502,315 @@ int ArmsLiveness::consecutiveAddress(ArmsBasicBlock *bb, int m, int n, int last_
 #endif
 //end of yanlin
 
+#ifdef secondLea
+
+bool ArmsLiveness::useinLea(ArmsFunction *f, std::string op, ArmsBasicBlock* last_bb)
+{
+    std::set<ArmsBasicBlock*> *bbs = f->get_basic_blocks();
+    ParseAPI::Block::Insns insns;
+    ParseAPI::Block *pblock;
+    
+    Expression::Ptr expr;
+    int find_lea = 0;
+    int previous_offset, previous_size;
+    for (std::set<ArmsBasicBlock *>::iterator it  = bbs->begin();
+                                              it != bbs->end();
+                                              it++) 
+    {
+        ArmsBasicBlock *bb = *it;
+        if ( bb != last_bb)
+        {
+            pblock= (ParseAPI::Block *) bb->get_parse_block();
+            if (!pblock) 
+            { 
+                ddprintf("Null pblock");
+                return 0; // TODO
+            }
+            pblock->getInsns(insns);
+            for (ParseAPI::Block::Insns::iterator it_ins  = insns.begin(); 
+                                                it_ins != insns.end(); 
+                                                it_ins++) {
+                
+                std::vector<Operand> operands;
+                (it_ins->second)->getOperands(operands);
+                std:string ins_str = (it_ins->second)->format(0).c_str();
+
+                //operand = (it_ins->second)->getOperand(1);
+                //ddprintf("iterating ins %s\n",(it_ins->second)->format(0).c_str());
+                //dprintf("Operand size %d\n",operands.size());
+                if (operands.size() > 1)
+                {
+                    std::string delimiter = ",";
+                    std::size_t index = ins_str.find(delimiter);
+
+                    int len = ins_str.size() - index-1;
+
+                    std::string operand1 = ins_str.substr(index+2,len);
+
+                    
+                    //dprintf("operand %s  %s %d %d\n",operand1.c_str(), op.c_str(), operand1.size(),op.size());
+
+                    if (find_lea)
+                    {
+                        //ParseAPI::Block::Insns::iterator temp = it_ins;
+                        ParseAPI::Block::Insns::iterator next_it_insn = it_ins;
+                        int offset = next_it_insn->first;
+                        //dprintf("next ins offset %lx\n",offset);
+                        if (previous_offset+previous_size != offset)
+                            return false;
+                        //dprintf("next ins is at %lx\n",offset);
+                        std::string next_ins_str =(next_it_insn->second)->format(0).c_str();
+                        std::size_t found = next_ins_str.find("lea");
+                        find_lea = 0;
+                        if (found != std::string::npos)
+                        {
+                            //dprintf("find lea %s\n",next_ins_str.c_str());
+                            //parse_instruction(it->second, bb, it->first);
+                            Instruction::Ptr iptr = next_it_insn->second;
+                            if (!iptr->isLegalInsn()) {
+                                dprintf("      %p: [ILLEGAL INSTRUCTION]\n", (void *) offset);
+                                bb->set_disas_err((void*) offset);
+                                return false;
+                            }
+                           // dprintf("      %p: %s\n", (void *) offset, iptr->format(0).c_str());
+                            std::set<RegisterAST::Ptr> register_set;
+
+                            if (!isNop(iptr)) iptr->getWriteSet(register_set);
+
+                            for (std::set<RegisterAST::Ptr>::iterator it  = register_set.begin(); 
+                                              it != register_set.end(); 
+                                                                    it++) {
+                                RegisterAST::Ptr reg = *it;
+                                int  reg_value = reg->getID().val();
+
+                                int reg_index = get_reg_index(reg);
+                                MachRegister cur = reg->getID();
+                                int width = cur.size();
+                                if (width == 4)
+                                    return true;
+                               
+                            }
+                            register_set.clear();                                           
+                            
+                        }
+                        return false;
+                    }
+
+                    else if (operand1 == op)
+                    {
+                        //dprintf("find operand %s\n",operand1.c_str());
+                        previous_offset = it_ins->first;
+                        previous_size = ins_length[previous_offset];
+                        std::set<RegisterAST::Ptr> register_set_pre;
+                    
+                        Instruction::Ptr iptr = it_ins->second;
+                        if (!isNop(iptr)) iptr->getWriteSet(register_set_pre);
+                        for (std::set<RegisterAST::Ptr>::iterator it  = register_set_pre.begin(); 
+                                              it != register_set_pre.end(); 
+                                                                    it++) {
+                                RegisterAST::Ptr reg = *it;
+                                int  reg_value = reg->getID().val();
+
+                                int reg_index = get_reg_index(reg);
+                                MachRegister cur = reg->getID();
+                                int width = cur.size();
+                                if (width == 8)
+                                {
+                                    find_lea = 1;
+                                    break;
+                                }
+                        }
+
+                        //find_lea = 1;
+                        //dprintf("previous ins offset %lx\n",previous_offset);
+                        /*int offset = previous_offset + previous_size;
+                        dprintf("next ins offset %lx\n",offset);
+                        //Instruction::Ptr iptr = offset2ins2[offset];
+                        std::string next_ins_str = offset2insstr[offset];;
+                        //find_lea = 1;
+                        std::size_t found = next_ins_str.find("lea");
+                        find_lea = 0;
+                        if (found != std::string::npos)
+                        {
+                            dprintf("find lea %s\n",next_ins_str.c_str());
+                            //parse_instruction(it->second, bb, it->first);
+                            //Instruction::Ptr iptr = next_it_insn->second;
+
+                            dprintf("      %p: %s\n", (void *) offset, next_ins_str.c_str());
+                            std::set<RegisterAST::Ptr> register_set;
+
+                            //if (!isNop(iptr)) iptr->getWriteSet(register_set);
+                            register_set = offset2reg[offset];
+
+                            for (std::set<RegisterAST::Ptr>::iterator it  = register_set.begin(); 
+                                              it != register_set.end(); 
+                                                                    it++) {
+                                RegisterAST::Ptr reg = *it;
+                                int  reg_value = reg->getID().val();
+
+                                int reg_index = get_reg_index(reg);
+                                MachRegister cur = reg->getID();
+                                int width = cur.size();
+                                if (width == 4)
+                                    return true;
+                               
+                            }
+                                                                        
+                            register_set.clear();
+                        }
+                        return false;*/
+                        
+                    }
+                    
+                }
+            }
+        }
+        
+    }
+    return false;
+
+}
+
+/*void ArmsLiveness::offsetToins(ArmsBasicBlock *block, unsigned long offset, Instruction::Ptr iptr)
+{
+   offset2ins[block][offset] = iptr;
+
+}*/
+
+int ArmsLiveness::is_secondlea(ArmsFunction *f)
+{
+    // for this case, the read of the arguments will be in the entry basic block
+    dprintf("check is secondlea function %s\n",f->get_name().c_str());
+    std::vector<ArmsBasicBlock *> blocks;
+    for (std::vector<ArmsBasicBlock *>::iterator it  = function_blocks[f].begin();
+                                                 it != function_blocks[f].end();
+                                                 it++) {
+        ArmsBasicBlock *first_bb = *it;
+        blocks.push_back(first_bb);
+        /*if (bb->outgoing_contains_inter())*/
+        
+        int n = 0;
+        for (int i = IA64_LAST_ARG; i >= 0; i--)
+        {
+             //dprintf("processing %d \n",i);
+            if (rw_registers[i].isRead(blocks))
+            {
+                //dprintf("find reading \n");
+                n = i;
+                break;
+            }
+        }
+
+        //dprintf("n is %d \n",n);
+        if (n == 0) return 0; 
+
+
+        ParseAPI::Block *pblock = (ParseAPI::Block *) first_bb->get_parse_block();
+        if (!pblock) 
+        { 
+            //dprintf("Null pblock");
+            return 0; // TODO
+        }
+        ParseAPI::Block::Insns insns;
+        pblock->getInsns(insns);
+
+        for (int i = n; i >= 0; i--) 
+        {
+            unsigned long offset = rw_registers[i].getReadOffset(first_bb);
+            if (!read_stack(first_bb, IA64_RSP,offset) && !read_stack(first_bb, IA64_RBP,offset))
+                continue;
+            
+            for (ParseAPI::Block::Insns::iterator it  = insns.begin(); 
+                                        it != insns.end(); 
+                                        it++) {
+                if ( it->first == offset)
+                {
+                    std::string ins_str = (it->second)->format(0).c_str();
+                    std::string delimiter_r = ",";
+                    std::string space_r = " ";
+                    std::size_t index_d_r = ins_str.find(delimiter_r);
+                    int len_r = index_d_r;
+                    std::string left_str_r = ins_str.substr(0,len_r);
+                    std::size_t index_s_r = left_str_r.find(space_r);
+                    int len_f_r = index_d_r - index_s_r-1;
+                    std::string op_r = left_str_r.substr(index_s_r+1,len_f_r);
+
+                    
+
+                    //std::set<RegisterAST::Ptr> register_set;
+                    
+                    //Instruction::Ptr iptr = next_it_insn->second;
+                    //if (!isNop(iptr)) iptr->getWriteSet(register_set);
+                   
+
+                    //dprintf("argument op may used for lea %s %s\n",f->get_name().c_str(), op_r.c_str());
+                    if (useinLea(f, op_r, first_bb))
+                    {   dprintf("offset is %lx\n",offset);
+                        dprintf("argument op may used for lea %s %s\n",f->get_name().c_str(), op_r.c_str());
+                        return (i+1);
+                    }
+
+                   continue;
+                }
+            }
+        }
+        
+        /*for (ParseAPI::Block::Insns::iterator it  = insns.begin(); 
+                                            it != insns.end(); 
+                                            it++)
+        {
+            
+            for (int i = n; i >= 0; i--) 
+            {
+              //ddprintf("check argumet reading %d \n",i);
+              //StateType state = rw_registers[i].getState(first_bb);
+
+                //if (state == IA64_READ)
+                {
+                    //ddprintf("find argumet reading %d \n",i);
+                    int width = width_registers[i].getWidth_callee(first_bb);
+                    if (width != 8)
+                        continue;
+                    
+                    //ddprintf("width is 8 \n");
+                    int offset = it->first;
+                    //ddprintf("offset is %lx\n",offset);
+                    std::string ins_str = (it->second)->format(0).c_str();
+                    if (!read_stack(first_bb, IA64_RSP,offset) && !read_stack(first_bb, IA64_RBP,offset))
+                        continue;
+                    
+                    std::string delimiter_r = ",";
+                    std::string space_r = " ";
+                    std::size_t index_d_r = ins_str.find(delimiter_r);
+                    int len_r = index_d_r;
+                    std::string left_str_r = ins_str.substr(0,len_r);
+                    std::size_t index_s_r = left_str_r.find(space_r);
+                    int len_f_r = index_d_r - index_s_r-1;
+                    std::string op_r = left_str_r.substr(index_s_r+1,len_f_r);
+                   
+
+                    dprintf("argument op may used for lea %s %s\n",f->get_name().c_str(), op_r.c_str());
+                    if (useinLea(f, op_r, first_bb))
+                    {   dprintf("offset is %lx\n",offset);
+                        dprintf("argument op may used for lea %s %s\n",f->get_name().c_str(), op_r.c_str());
+                        return (i+1);
+                    }
+
+                   continue;
+                }
+            }
+            
+            
+        
+        }*/
+        return 0;
+    
+    }
+    
+
+}
+#endif
+
 /* This function can safely return 0 to indicate the function is not-variadic:
  * variadic functions always expect at least one argument. */
 int ArmsLiveness::is_variadic(ArmsFunction *f) {
@@ -2759,7 +3107,7 @@ int ArmsLiveness::is_variadic(ArmsFunction *f) {
             std::string ins_str = (it->second)->format(0).c_str();
             //dprintf("instruction write to stack %s\n", (it->second)->format(0).c_str());
             int last_stack_offset = get_offset(ins_str);
-            if (m == 0)
+            /*if (m == 0)
             {
                 ddprintf("m==0 %s\n",f->get_name().c_str());
                 if (allConsecutive(last_bb,m,IA64_LAST_ARG-1,last_stack_offset,insns))
@@ -2785,7 +3133,7 @@ int ArmsLiveness::is_variadic(ArmsFunction *f) {
                     return 0;
                 }
                
-            }
+            }*/
 
             m = consecutiveAddress(last_bb, k, IA64_LAST_ARG, last_stack_offset);
             break;
@@ -2794,7 +3142,7 @@ int ArmsLiveness::is_variadic(ArmsFunction *f) {
 
     //for gcc the varadic parameter order is %rdx, %rcx, %r8 and %r9
     
-    for (ParseAPI::Block::Insns::reverse_iterator rit  = insns.rbegin(); 
+    /*for (ParseAPI::Block::Insns::reverse_iterator rit  = insns.rbegin(); 
                                         rit != insns.rend(); 
                                         rit++){
         if ( rit->first == last_seen_offset)
@@ -2829,7 +3177,7 @@ int ArmsLiveness::is_variadic(ArmsFunction *f) {
             m = consecutiveAddress(last_bb, k, IA64_LAST_ARG,last_stack_offset_r);
             break;
         } 
-    } 
+    } */
     
     //dprintf("yanlin debuging \n");
     
@@ -4492,17 +4840,19 @@ std::vector<uint32_t> ArmsLiveness::getForwardLiveness2(ArmsFunction *f,
                     
                     #ifdef SixToThree
                     {
-                        /*int isread64To32 = isBBRead64To32(bb,i);
+                        int isread64To32 = isBBRead64To32(bb,i);
                         if (isread64To32)
                         {
                             set_width_bitmap(&read63_bitmap,i,0x8);
                            
-                        }*/
+                        }
 
                         int ispush_arg = isBBpush(bb,i);
                         if (ispush_arg)
                         {
+                            #ifdef six2three_policy
                             set_width_bitmap(&read63_bitmap,i,0x8);
+                            #endif
                         }
                     
 
@@ -4645,7 +4995,8 @@ std::vector<uint32_t> ArmsLiveness::getForwardLiveness2(ArmsFunction *f,
             ddprintf("is direct call, storing fallthrough\n");
             
             next_bb = edge->target();
-            fallthrough_bb = bb->get_fallthrough_bb();
+            //fallthrough_bb = bb->get_fallthrough_bb();
+            fallthrough_bb = bb->get_fallthrough_bb_dcall();
        
             assert(next_bb != NULL);
 
@@ -4898,6 +5249,15 @@ std::vector<uint32_t> ArmsLiveness::getForwardLiveness2(ArmsFunction *f,
                         /* ... */
                     } else if (is_reg_bitmap(bitmap, i, IA64_RW)) {
                         /* ... */
+                        set_reg_bitmap(&best_bitmap, i, IA64_READ);
+                        #ifdef STRATEGY_WIDTH
+                        set_width_bitmap(&best_width_bitmap,i,get_width_bitmap(widthmap,i));
+                        #endif
+
+                        #ifdef SixToThree
+                        set_width_bitmap(&best_read63_bitmap,i,get_width_bitmap(R63bitmap,i));
+                        #endif
+
                     } else if (is_reg_bitmap(bitmap, i, IA64_CLEAR)) {
                         /* ... */
                     }
@@ -5802,7 +6162,7 @@ int ArmsLiveness::get_arg_count(ArmsFunction *f) {
                     * function as a second return value and thus decrement the
                     * argcount.
                     */
-                argcount--;
+                //argcount--;
             }
         }
         
@@ -5873,14 +6233,22 @@ int ArmsLiveness::get_arg_count(ArmsFunction *f) {
         {
             #ifdef STATISTICS
             Fr64to32[i] = i+1;
-            set_width_bitmap(&info[2],i,0x4);
-            //arg_width[i] = 0x4;
+            //set_width_bitmap(&info[2],i,0x4);
+            arg_width[i] = 0x4;
             //Fr64to32.insert(f->get_base_addr());
             #endif
             //printf("Function %s read 64 to 32 \n",f->get_name().c_str());
         }
             
         #endif 
+        #ifdef secondLea
+        int r = is_secondlea(f);
+        if (r)
+        {
+            Fr64to32[r-1] = r;
+             arg_width[r-1] = 0x4;
+        }
+        #endif
        
     }
     f->set_argwidth(arg_width);
@@ -6271,7 +6639,7 @@ int ArmsLiveness::get_icallsites(ArmsFunction *f) {
         ddprintf("finished backward analysis\n");
 
         //testing, added by yanlin
-        {
+        /*{
             
             if (ret_blocks[f].find(block) != ret_blocks[f].end())
             {
@@ -6288,7 +6656,7 @@ int ArmsLiveness::get_icallsites(ArmsFunction *f) {
                 }
             }
             
-        }
+        }*/
 
         //end of testing
 
@@ -6304,7 +6672,7 @@ int ArmsLiveness::get_icallsites(ArmsFunction *f) {
         int max_arguments = argcount;
         int min_arguments = argcount;
 
-        //if (!icalls_optimized()) max_arguments = getFirstReadArgRegister(block, icall_addr);
+        if (!icalls_optimized()) max_arguments = getFirstReadArgRegister(block, icall_addr);
 
         #ifdef STRATEGY_WIDTH
         std::vector<uint16_t> arg_width;
@@ -6343,8 +6711,11 @@ int ArmsLiveness::get_icallsites(ArmsFunction *f) {
                 if (is_xor)
                 {
                     icallxor[i] = i+1;
+                    #ifdef xor_policy
                     set_width_bitmap(&width_bitmap,i,0x8);
                     arg_width[i] = 0x8;
+                    
+                    #endif
                 }
             }
             #endif
@@ -6357,8 +6728,10 @@ int ArmsLiveness::get_icallsites(ArmsFunction *f) {
                 if (is_constant)
                 {
                     
+                    #ifdef constant_policy
                     set_width_bitmap(&width_bitmap,i,0x8);
                     arg_width[i] = 0x8;
+                    #endif
                     if (is_constant == 1)
                         icall_pointer[i]=i+1;
                     else if (is_constant == 2)
